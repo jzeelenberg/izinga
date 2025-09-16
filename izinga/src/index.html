@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Izinga</title>
+  <style>
+    body {
+        font-family: sans-serif;
+        text-align: center;
+        background: #f0f0f0;
+    }
+    #connect {
+        margin: 20px;
+        padding: 10px 20px;
+        font-size: 18px;
+    }
+    #canvas-wrapper {
+        width: 90%;              /* scales with page width */
+        max-height: 1800px;        /* optional limit */
+        max-width: 600px;
+        aspect-ratio: 2 / 3;     /* keeps width:height */
+        margin: auto;
+    }
+    canvas {
+        border: 0px solid #333;
+        border-radius: 15px;
+        background: white;
+        box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        width: 100%;   /* fill wrapper width */
+        height: 100%;  /* auto from aspect-ratio */
+        display: block;
+    }
+  </style>
+</head>
+<body>
+    <h1>Izinga</h1>
+    <button id="connect">Connect</button>
+    <br>
+    <div id="canvas-wrapper">
+        <canvas id="caravanCanvas"></canvas>
+    </div>
+    <p>Pitch: <span id="pitch">--</span>°</p>
+    <p>Roll: <span id="roll">--</span>°</p>
+    <p>Temp: <span id="temp">--</span>°C</p>
+
+    <script>
+        const SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";  // replace with your service UUID
+        const ATTITUDE_UUID   = "abcd1234-1234-1234-1234-1234567890ab";  // replace with your pitch characteristic UUID
+
+        const canvas = document.getElementById("caravanCanvas");
+        const ctx = canvas.getContext("2d");
+        let pitch = 0, roll = 0, temp = 0;
+
+        async function connectBLE () {
+        try {
+            const device = await navigator.bluetooth.requestDevice({
+            filters: [{ services: [SERVICE_UUID] }]
+            });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+
+            const decoder = new TextDecoder("utf-8");
+
+            // Get characteristics
+            const attitudeChar = await service.getCharacteristic(ATTITUDE_UUID);
+
+            attitudeChar.startNotifications();
+            attitudeChar.addEventListener("characteristicvaluechanged", event => {
+                const data = event.target.value;
+                const str = new TextDecoder().decode(data);
+                [pitch, roll, temp] = str.split(",").map(parseFloat);
+                //pitch = -pitch; //flip teh sign for roll for "bubble behaviour"
+                document.getElementById("pitch").textContent = pitch.toFixed(1);
+                document.getElementById("roll").textContent = roll.toFixed(1);
+                document.getElementById("temp").textContent = temp.toFixed(1);
+                updateBubble();
+            });
+
+        } catch (error) {
+            console.error(error);
+        }
+        }
+
+        function resizeCanvas() {
+            // Match canvas resolution to CSS box size
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+
+            drawCaravan(); // redraw after resize
+        }
+
+        function drawCaravan() {
+
+            const db_length = canvas.height * 0.1;
+            van_height = canvas.height - db_length;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const w = canvas.width;
+            const h = canvas.height;
+
+            // Draw grid
+            ctx.strokeStyle = "rgba(0,0,0,0.1)";
+            for (let x = w/2; x < w; x += 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, db_length);
+                ctx.lineTo(x, h);
+                ctx.stroke();
+            }
+            for (let x = w/2; x > 0; x -= 50) {
+                ctx.beginPath();
+                ctx.moveTo(x, db_length);
+                ctx.lineTo(x, h);
+                ctx.stroke();
+            }
+            for (let y = db_length + van_height/2; y < h; y += 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+                ctx.stroke();
+            }
+            for (let y = db_length + van_height/2; y > db_length; y -= 50) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+                ctx.stroke();
+            }
+
+            // Crosshairs
+            ctx.strokeStyle = "rgba(0,0,0,0.2)";
+            ctx.beginPath();
+            ctx.moveTo(w/2, db_length);
+            ctx.lineTo(w/2, h);
+            ctx.moveTo(0, db_length + van_height/2);
+            ctx.lineTo(w, db_length + van_height/2);
+            ctx.stroke();
+
+            // Caravan rectangle outline
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, db_length, w, h);
+
+            // Hitch (small square at left center)
+            ctx.fillStyle = "#666";
+            ctx.fillRect(-34 + 0, h/2 - 15, 30, 30);
+
+            // Bubble position based on pitch/roll
+            const maxRoll = 3;   // degrees
+            const maxPitch = 3;  // degrees
+            const maxX = w / 2;
+            const maxY = van_height / 2;
+
+            let roll_clipped = 0.0;
+            let pitch_clipped = 0.0;
+
+            roll_clipped = Math.max(-maxRoll, Math.min(roll, maxRoll))
+            pitch_clipped = Math.max(-maxPitch, Math.min(pitch, maxPitch))
+
+            const x = (roll_clipped / maxRoll) * maxX;
+            const y = ((pitch_clipped / maxPitch) * maxY);
+
+            const bubbleX = w/2 + x;
+            const bubbleY = db_length + van_height/2 + y;
+
+            ctx.beginPath();
+            ctx.arc(bubbleX, bubbleY, 15, 0, Math.PI * 2);
+            ctx.fillStyle = (Math.abs(roll) > 1 || Math.abs(pitch) > 1) 
+                            ? "rgba(255,0,0,0.7)" 
+                            : "rgba(0,200,0,0.7)";
+
+            ctx.fill();
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // make the drawbar:
+            const dbx = w/2; // x of the tip
+            const dby = 0;  // y of the tip
+            const baseWidth = w/2;
+            const height = db_length;
+
+            ctx.beginPath();
+            ctx.moveTo(dbx, dby); // Tip of the triangle
+            ctx.lineTo(dbx - baseWidth / 2, dby + height); // Bottom left
+            ctx.lineTo(dbx + baseWidth / 2, dby + height); // Bottom right
+            ctx.closePath(); // Connects back to tip
+
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.stroke();
+
+            
+        }
+
+        function updateBubble() {
+            drawCaravan();
+            document.getElementById("pitch").textContent = pitch.toFixed(1);
+            document.getElementById("roll").textContent = roll.toFixed(1);
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+        resizeCanvas(); // run once
+
+        document.getElementById("connect").addEventListener("click", connectBLE);
+    </script>
+</body>
+</html>
